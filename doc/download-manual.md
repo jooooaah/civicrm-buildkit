@@ -4,7 +4,7 @@ You may install buildkit in other environments. The main pre-requisites are:
 
  * Linux or OS X
  * Git
- * PHP 5.3+ (Extensions: `bcmath curl gd gettext imap intl imagick json mbstring mcrypt openssl pdo_mysql phar posix soap zip`)
+ * PHP 5.3+ (Extensions: `php5-bcmath php5-curl php5-gd php5-gettext php5-imap php5-intl php5-imagick php5-json php5-mbstring php5-mcrypt php5-openssl php5-pdo_mysql php5-phar php5-posix php5-soap php5-zip`)
  * NodeJS (v5 recommended)
  * NPM 
  * Recommended (_for [amp](https://github.com/totten/amp) and [civibuild](doc/civibuild.md)_)
