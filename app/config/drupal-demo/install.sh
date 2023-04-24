@@ -2,6 +2,10 @@
 
 ## install.sh -- Create config files and databases; fill the databases
 
+## Transition: Old builds don't have "web/" folder. New builds do.
+## TODO: Simplify sometime after Dec 2019
+[ -d "$WEB_ROOT/web" ] && CMS_ROOT="$WEB_ROOT/web"
+
 ###############################################################################
 ## Create virtual-host and databases
 
@@ -18,35 +22,41 @@ drupal_install
 DRUPAL_SITE_DIR=$(_drupal_multisite_dir "$CMS_URL" "$SITE_ID")
 CIVI_DOMAIN_NAME="Demonstrators Anonymous"
 CIVI_DOMAIN_EMAIL="\"Demonstrators Anonymous\" <info@example.org>"
-CIVI_CORE="${WEB_ROOT}/sites/all/modules/civicrm"
-CIVI_SETTINGS="${WEB_ROOT}/sites/${DRUPAL_SITE_DIR}/civicrm.settings.php"
-CIVI_FILES="${WEB_ROOT}/sites/${DRUPAL_SITE_DIR}/files/civicrm"
+CIVI_CORE="${CMS_ROOT}/sites/all/modules/civicrm"
+CIVI_SETTINGS="${CMS_ROOT}/sites/${DRUPAL_SITE_DIR}/civicrm.settings.php"
+CIVI_FILES="${CMS_ROOT}/sites/${DRUPAL_SITE_DIR}/files/civicrm"
 CIVI_TEMPLATEC="${CIVI_FILES}/templates_c"
 
 CIVI_UF="Drupal"
 
 ## civicrm-core v4.7+ sets default ext dir; for older versions, we'll set our own.
 if [[ "$CIVI_VERSION" =~ ^4.[0123456](\.([0-9]|alpha|beta)+)?$ ]] ; then
-  CIVI_EXT_DIR="${WEB_ROOT}/sites/${DRUPAL_SITE_DIR}/ext"
+  CIVI_EXT_DIR="${CMS_ROOT}/sites/${DRUPAL_SITE_DIR}/ext"
   CIVI_EXT_URL="${CMS_URL}/sites/${DRUPAL_SITE_DIR}/ext"
 fi
 
-civicrm_install
+civicrm_install_transitional
 
 ###############################################################################
 ## Extra configuration
-pushd "${WEB_ROOT}/sites/${DRUPAL_SITE_DIR}" >> /dev/null
+
+pushd "${CMS_ROOT}/sites/${DRUPAL_SITE_DIR}" >> /dev/null
 
   drush -y updatedb
   drush -y en civicrm toolbar locale garland login_destination userprotect
   ## disable annoying/unneeded modules
   drush -y dis overlay
+  drupal7_po_import
 
   ## Setup CiviCRM
-  echo '{"enable_components":["CiviEvent","CiviContribute","CiviMember","CiviMail","CiviReport","CiviPledge","CiviCase","CiviCampaign","CiviGrant"]}' \
-    | drush cvapi setting.create --in=json
+  if civicrm_check_ver '<' 5.47.alpha1 ; then
+    cv vset '{"enable_components":["CiviEvent","CiviContribute","CiviMember","CiviMail","CiviReport","CiviPledge","CiviCase","CiviCampaign","CiviGrant"]}'
+  else
+    cv vset '{"enable_components":["CiviEvent","CiviContribute","CiviMember","CiviMail","CiviReport","CiviPledge","CiviCase","CiviCampaign"]}'
+  fi
   ## Note: CiviGrant disabled by default. If you enable, update the permissions as well.
   civicrm_apply_demo_defaults
+  cv ev 'if(is_callable(array("CRM_Core_BAO_CMSUser","synchronize"))){CRM_Core_BAO_CMSUser::synchronize(FALSE);}else{CRM_Utils_System::synchronizeUsers();}'
 
   ## Setup theme
   #above# drush -y en garland
@@ -74,6 +84,28 @@ pushd "${WEB_ROOT}/sites/${DRUPAL_SITE_DIR}" >> /dev/null
     remove "change own password"
 EOPERM
 
+ ## Setup advisor user
+  # This gives us a user with more limited permissions.
+  # specifically the user does not have 'edit all contacts'
+  # or 'view all contacts'. However, they will be able to view
+  # some by virtue of an acl
+  drush role-create advisor
+  drush scr "$PRJDIR/src/drush/perm.php" <<EOPERM
+    role "advisor"
+    add 'access toolbar'
+    add "access CiviCRM"
+    add "access CiviReport"
+    add 'view debug output'
+    add 'access CiviContribute'
+    add 'access CiviMember'
+    add 'view event info'
+    add 'access CiviEvent'
+    add 'view report sql'
+    add 'merge duplicate contacts'
+EOPERM
+  drush -y user-create --password="advisor" --mail="jenny@example.com" "advisor"
+  drush -y user-add-role advisor "advisor"
+
   ## Setup demo user
   drush -y en civicrm_webtest
   drush -y user-create --password="$DEMO_PASS" --mail="$DEMO_EMAIL" "$DEMO_USER"
@@ -88,6 +120,8 @@ EOPERM
     add 'access my cases and activities'
     add 'add cases'
     add 'delete in CiviCase'
+    add 'close own manual batches'
+    add 'edit own manual batches'
     add 'administer CiviCampaign'
     add 'manage campaign'
     add 'reserve campaign contacts'
@@ -101,19 +135,31 @@ EOPERM
 EOPERM
   ## Note: If you enable CiviGrant, the grant 'access CiviGrant', 'edit grants', 'delete in CiviGrant'
 
-  ## Setup CiviVolunteer
-  drush -y cvapi extension.install key=org.civicrm.angularprofiles debug=1
-
-  drush -y cvapi extension.install key=org.civicrm.volunteer debug=1
-  drush scr "$PRJDIR/src/drush/perm.php" <<EOPERM
-    role 'anonymous user'
-    role 'authenticated user'
-    add 'register to volunteer'
+  ## Setup demo extensions
+  cv en --ignore-missing $CIVI_DEMO_EXTS
+  if [[ "$CIVI_DEMO_EXTS" =~ volunteer ]]; then
+    drush scr "$PRJDIR/src/drush/perm.php" <<EOPERM
+      role 'anonymous user'
+      role 'authenticated user'
+      role 'civicrm_webtest_user'
+      add 'register to volunteer'
 EOPERM
+    drush scr "$PRJDIR/src/drush/perm.php" <<EOPERM
+      role 'civicrm_webtest_user'
+      add 'create volunteer projects'
+      add 'edit own volunteer projects'
+      add 'edit all volunteer projects'
+      add 'log own hours'
+      add 'edit volunteer project relationships'
+      add 'edit volunteer registration profiles'
+      add 'delete own volunteer projects'
+      add 'delete all volunteer projects'
+EOPERM
+  fi
 
-  drush -y -u "$ADMIN_USER" cvapi extension.install key=org.civicoop.civirules debug=1
-  drush -y -u "$ADMIN_USER" cvapi extension.install key=eu.tttp.civisualize debug=1
-  drush -y -u "$ADMIN_USER" cvapi extension.install key=org.civicrm.module.cividiscount debug=1
+  ## Demo sites always disable email and often disable cron
+  drush cvapi StatusPreference.create ignore_severity=critical name=checkOutboundMail
+  drush cvapi StatusPreference.create ignore_severity=critical name=checkLastCron
 
   ## Setup CiviCRM dashboards
   INSTALL_DASHBOARD_USERS="$ADMIN_USER;$DEMO_USER" drush scr "$SITE_CONFIG_DIR/install-dashboard.php"

@@ -1,0 +1,73 @@
+#!/bin/bash
+set -e
+
+## Example usage:
+##
+## $ env SECVER=5.57-security SUITES=phpunit-e2e run-bknix-job --mock max Security-Core-Matrix
+
+#################################################
+## Environment variables
+
+## EXECUTOR_NUMBER: The number of this concurrent process
+## WORKSPACE: The path where Jenkins stores data for this job
+## SECVER: Name of the security branch (e.g. `5.57-security`)
+## SUITES: Space-limited list of test-suites (e.g. `phpunit-e2e phpunit-civi`)
+assert_common EXECUTOR_NUMBER WORKSPACE SUITES
+assert_regex '^[0-9a-z\.-]\+$' "$SECVER" "Missing or invalid SECVER"
+
+if [ "$SECVER" == "security-fixes" ]; then
+  ## This isn't perfect, but it should be close 
+  CIVIVER=$( curl 'https://latest.civicrm.org/stable.php' | cut -d. -f1,2 )
+  FORKNAME="security"
+  DRUPAL_BRANCH_PREFIX=""
+else
+  CIVIVER=$( echo "$SECVER" | cut -f1 -d- )
+  FORKNAME=$( echo "$SECVER" | cut -f2 -d- )
+  DRUPAL_BRANCH_PREFIX="7.x-"
+fi
+assert_common CIVIVER
+
+#################################################
+## Main
+
+use_bknix_tmp
+
+BLDNAME="build-$EXECUTOR_NUMBER"
+
+## Reset (cleanup after previous tests)
+clean_legacy_workspace "$WORKSPACE/junit" "$WORKSPACE/civibuild-html" "$WORKSPACE/last-scan.json" "$WORKSPACE/new-scan.json"
+init_std_workspace
+if [ -d "$BKITBLD/$BLDNAME" ]; then
+  echo y | civibuild destroy "$BLDNAME"
+fi
+
+## Ensure we can connect to security repo
+civi-ssh-host-keys
+
+## Download application (with civibuild)
+civibuild download "$BLDNAME" \
+  --civi-ver "$CIVIVER" \
+  --type "drupal-clean"
+
+pushd "$BKITBLD/$BLDNAME/web/sites/all/modules/civicrm"
+  forkify add-remotes "$FORKNAME" "git@lab.civicrm.org:$FORKNAME/"
+  forkify fetch "$FORKNAME"
+  git checkout "$SECVER"
+  pushd packages; git checkout "$SECVER"; popd
+  pushd drupal; git checkout "${DRUPAL_BRANCH_PREFIX}${SECVER}"; popd
+popd
+
+## Install application (with civibuild)
+civibuild install "$BLDNAME" \
+  --admin-pass "n0ts3cr3t"
+
+## Report details about this build of the application
+civibuild show "$BLDNAME" \
+  --html "$WORKSPACE_HTML" \
+  --last-scan "$WORKSPACE_BUILD/last-scan.json" \
+  --new-scan "$WORKSPACE_BUILD/new-scan.json"
+cp "$WORKSPACE_BUILD/new-scan.json" "$WORKSPACE_BUILD/last-scan.json"
+
+## Detect & execute tests
+civi-test-run -b "$BLDNAME" -j "$WORKSPACE_JUNIT" $SUITES
+exit $?

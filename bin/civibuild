@@ -1,4 +1,5 @@
 #!/bin/bash
+{ # https://stackoverflow.com/a/21100710
 set -e
 
 ###############################################################################
@@ -14,8 +15,8 @@ function absdirname() {
 
 BINDIR=$(absdirname "$0")
 PRJDIR=$(dirname "$BINDIR")
-TMPDIR="$PRJDIR/app/tmp"
-BLDDIR="$PRJDIR/build"
+[ -z "$CIVIBUILD_HOME" ] && TMPDIR="$PRJDIR/app/tmp" || TMPDIR="$CIVIBUILD_HOME/.civibuild/tmp"
+[ -z "$CIVIBUILD_HOME" ] && BLDDIR="$PRJDIR/build" || BLDDIR="$CIVIBUILD_HOME"
 
 ## Make sure bundled utilities are available, regardless of local config
 export PATH="$BINDIR:$PATH"
@@ -42,3 +43,6 @@ else
   echo "Unrecognized action: $ACTION"
   civibuild_app_usage
 fi
+
+exit
+}

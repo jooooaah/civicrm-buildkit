@@ -37,6 +37,31 @@ function cvutil_assertvars() {
 }
 
 ###############################################################################
+## Run a PHP program and explicitly disable debugging.
+## usage: cvutil_php_nodbg <program name> [<args>...]
+function cvutil_php_nodbg() {
+  local cmd=$(which "$1")
+  [ -z "$cmd" ] && cvutil_fatal "Failed to locate $cmd"
+  shift
+  XDEBUG_PORT= XDEBUG_MODE=off php -d xdebug.remote_enable=off "$cmd" "$@"
+}
+
+###############################################################################
+## Find the location of <item> in a list of paths.
+## usage: cvutil_path_search <item> <parent1>:<parent2>:...
+## example: cvutil_path_search ls /usr/local/bin:/usr/bin:/bin
+function cvutil_path_search() {
+  local search_target="$1"
+  local search_paths="$2"
+  printf %s "$search_paths" | awk 'BEGIN {RS=":"}; 1' | while read candidate ; do
+    if [ -n "$candidate" -a -e "$candidate/$search_target" ]; then
+      echo "$candidate/$search_target"
+      break
+    fi
+  done
+}
+
+###############################################################################
 ## Prompt user for confirmation
 ## (In automated scripts or blank response, use default)
 ##
@@ -90,6 +115,27 @@ function cvutil_export() {
 }
 
 ###############################################################################
+##  usage: cvutil-fatal <message>
+function cvutil_fatal() {
+  echo "$@" >&2
+  exit 90
+}
+
+###############################################################################
+## Delete a file try, overriding any unwriteable file permissions
+function cvutil_rmrf() {
+  local folder="$1"
+  if [ -z "$folder" ]; then
+    return
+  fi
+  if [ ! -e "$folder" ]; then
+    return
+  fi
+  find "$folder" -type d -print0 | xargs -0 -n 20 chmod u+w
+  rm -rf "$folder"
+}
+
+###############################################################################
 ## Summarize the content of key environment variables
 ## usage: cvutil_summary <message> <var1> <var2> ...
 function cvutil_summary() {
@@ -109,7 +155,7 @@ function cvutil_summary() {
 ###############################################################################
 ## usage: cvutil_makepasswd <strlen>
 function cvutil_makepasswd() {
-  php $PRJDIR/bin/mkpasswd.php $1
+  cvutil_php_nodbg mkpasswd.php "$@"
 }
 
 ###############################################################################
@@ -140,7 +186,7 @@ function cvutil_mkurl() {
   local subsite_name="$1"
   cvutil_assertvars cvutil_mkurl URL_TEMPLATE
   if [ "%AUTO%" == "$URL_TEMPLATE" ]; then
-    echo "http://%subsite_name%.dev" | sed "s;%SITE_NAME%;$subsite_name;g"
+    echo "http://%subsite_name%.test" | sed "s;%SITE_NAME%;$subsite_name;g"
   else
     echo "$URL_TEMPLATE" | sed "s;%SITE_NAME%;$subsite_name;g"
   fi
@@ -170,13 +216,15 @@ function cvutil_parse_site_name_id() {
 
 ###############################################################################
 ## Append the civibuild settings directives to a file
-## usage: cvutil_inject_settings <php-file> <settings-dir-name>
+## usage: cvutil_inject_settings <php-file> <settings-dir-name> [<preamble>]
 ## example: cvutil_inject_settings "/var/www/build/drupal/sites/foo/civicrm.settings.php" "civicrm.settings.d"
-## example: cvutil_inject_settings "/var/www/build/drupal/sites/foo/settings.php" "drupal.settings.d"
+## example: cvutil_inject_settings "/var/www/build/drupal/sites/foo/settings.php" "drupal.settings.d" 'global $settings;'
 function cvutil_inject_settings() {
   local FILE="$1"
   local NAME="$2"
-  cvutil_assertvars cvutil_inject_settings PRJDIR SITE_NAME SITE_TYPE SITE_CONFIG_DIR SITE_ID SITE_TOKEN PRIVATE_ROOT FILE NAME
+  local PREAMBLE="$3"
+  cvutil_assertvars cvutil_inject_settings PRJDIR CIVI_CRED_KEY CIVI_SIGN_KEY SITE_NAME SITE_TYPE SITE_CONFIG_DIR SITE_ID SITE_TOKEN PRIVATE_ROOT FILE NAME
+  # Note: CMS_VERSION ought to be defined for use in $civibuild['CMS_VERSION'], but it hasn't always been, and for most build-types its absence would be non-fatal.
 
   ## Prepare temp file
   local TMPFILE="${TMPDIR}/${SITE_TYPE}/${SITE_NAME}/${SITE_ID}.settings.tmp"
@@ -195,6 +243,8 @@ function cvutil_inject_settings() {
     \$civibuild['PRIVATE_ROOT'] = '$PRIVATE_ROOT';
     \$civibuild['WEB_ROOT'] = '$WEB_ROOT';
     \$civibuild['CMS_ROOT'] = '$CMS_ROOT';
+    \$civibuild['CMS_VERSION'] = '$CMS_VERSION';
+    $PREAMBLE
 
     if (file_exists(\$civibuild['PRJDIR'].'/src/civibuild.settings.php')) {
       require_once \$civibuild['PRJDIR'].'/src/civibuild.settings.php';
@@ -260,7 +310,7 @@ function http_cache_setup() {
   fi
 
   cvutil_makeparent "$lock"
-  if pidlockfile.php "$lock" $$ $CACHE_LOCK_WAIT ; then
+  if cvutil_php_nodbg pidlockfile.php "$lock" $$ $CACHE_LOCK_WAIT ; then
     php -r 'echo time();' > $lastrun
     if [ ! -f "$cachefile" -o -z "$OFFLINE" ]; then
       echo "[[Update HTTP cache: $url => $cachefile]]"
@@ -289,14 +339,14 @@ function amp_install() {
 function _amp_install_cms() {
   echo "[[Setup MySQL and HTTP for CMS]]"
   cvutil_assertvars _amp_install_cms CMS_ROOT SITE_NAME SITE_ID TMPDIR
-  local amp_vars_file_path=$(mktemp.php ampvar)
+  local amp_vars_file_path=$(cvutil_php_nodbg mktemp.php ampvar)
   local amp_name="cms$SITE_ID"
   [ "$SITE_ID" == "default" ] && amp_name=cms
 
   if [ -n "$CMS_URL" ]; then
-    amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=CMS_ --url="$CMS_URL" --output-file="$amp_vars_file_path" --perm="$CMS_DB_PERM"
+    cvutil_php_nodbg amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=CMS_ --url="$CMS_URL" --output-file="$amp_vars_file_path" --perm="$CMS_DB_PERM"
   else
-    amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=CMS_ --output-file="$amp_vars_file_path" --perm="$CMS_DB_PERM"
+    cvutil_php_nodbg amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=CMS_ --output-file="$amp_vars_file_path" --perm="$CMS_DB_PERM"
   fi
 
   source "$amp_vars_file_path"
@@ -306,11 +356,11 @@ function _amp_install_cms() {
 function _amp_install_civi() {
   echo "[[Setup MySQL for Civi]]"
   cvutil_assertvars _amp_install_civi CMS_ROOT SITE_NAME SITE_ID TMPDIR
-  local amp_vars_file_path=$(mktemp.php ampvar)
+  local amp_vars_file_path=$(cvutil_php_nodbg mktemp.php ampvar)
   local amp_name="civi$SITE_ID"
   [ "$SITE_ID" == "default" ] && amp_name=civi
 
-  amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=CIVI_ --skip-url --output-file="$amp_vars_file_path" --perm="$CIVI_DB_PERM"
+  cvutil_php_nodbg amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=CIVI_ --skip-url --output-file="$amp_vars_file_path" --perm="$CIVI_DB_PERM"
 
   source "$amp_vars_file_path"
   rm -f "$amp_vars_file_path"
@@ -319,11 +369,11 @@ function _amp_install_civi() {
 function _amp_install_test() {
   echo "[[Setup MySQL for Test]]"
   cvutil_assertvars _amp_install_test CMS_ROOT SITE_NAME SITE_ID TMPDIR
-  local amp_vars_file_path=$(mktemp.php ampvar)
+  local amp_vars_file_path=$(cvutil_php_nodbg mktemp.php ampvar)
   local amp_name="test$SITE_ID"
   [ "$SITE_ID" == "default" ] && amp_name=test
 
-  amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=TEST_ --skip-url --output-file="$amp_vars_file_path" --perm="$TEST_DB_PERM"
+  cvutil_php_nodbg amp create -f --root="$CMS_ROOT" --name="$amp_name" --prefix=TEST_ --skip-url --output-file="$amp_vars_file_path" --perm="$TEST_DB_PERM"
 
   source "$amp_vars_file_path"
   rm -f "$amp_vars_file_path"
@@ -336,8 +386,8 @@ function _amp_install_test() {
 function _amp_install_clone() {
   echo "[[Setup MySQL for \"$2\"]]"
   cvutil_assertvars _amp_install_cms CLONE_DIR SITE_NAME SITE_ID TMPDIR
-  local amp_vars_file_path=$(mktemp.php ampvar)
-  amp create -f --root="$CLONE_DIR" --name=$1 --prefix=$2_ --skip-url --output-file="$amp_vars_file_path" --perm="$CIVI_DB_PERM"
+  local amp_vars_file_path=$(cvutil_php_nodbg mktemp.php ampvar)
+  cvutil_php_nodbg amp create -f --root="$CLONE_DIR" --name=$1 --prefix=$2_ --skip-url --output-file="$amp_vars_file_path" --perm="$CIVI_DB_PERM"
   source "$amp_vars_file_path"
   rm -f "$amp_vars_file_path"
 }
@@ -347,8 +397,8 @@ function _amp_install_clone() {
 ## example: _amp_imprt /var/www/build/myproject civi CIVI
 function _amp_import() {
   cvutil_assertvars _amp_import SITE_NAME SITE_ID TMPDIR
-  local amp_vars_file_path=$(mktemp.php ampvar)
-  amp export --root="$1" --name=$2 --prefix=$3_ --output-file="$amp_vars_file_path"
+  local amp_vars_file_path=$(cvutil_php_nodbg mktemp.php ampvar)
+  cvutil_php_nodbg amp export --root="$1" --name=$2 --prefix=$3_ --output-file="$amp_vars_file_path"
   source "$amp_vars_file_path"
   rm -f "$amp_vars_file_path"
 }
@@ -362,14 +412,14 @@ function amp_snapshot_create() {
     echo "[[Save CMS DB ($CMS_DB_NAME) to file ($CMS_SQL)]]"
     cvutil_assertvars amp_snapshot_create CMS_SQL CMS_DB_ARGS CMS_DB_NAME
     cvutil_makeparent "$CMS_SQL"
-    amp sql:dump --root="$CMS_ROOT" -Ncms | gzip > "$CMS_SQL"
+    cvutil_php_nodbg amp sql:dump --root="$CMS_ROOT" --passthru="--no-tablespaces" -Ncms | gzip > "$CMS_SQL"
   fi
 
   if [ -z "$CIVI_SQL_SKIP" ]; then
     echo "[[Save Civi DB ($CIVI_DB_NAME) to file ($CIVI_SQL)]]"
     cvutil_assertvars amp_snapshot_create CIVI_SQL CIVI_DB_ARGS CIVI_DB_NAME
     cvutil_makeparent "$CIVI_SQL"
-    amp sql:dump --root="$CMS_ROOT" -Ncivi | gzip > "$CIVI_SQL"
+    cvutil_php_nodbg amp sql:dump --root="$CMS_ROOT" --passthru="--no-tablespaces --routines" -Ncivi | gzip > "$CIVI_SQL"
   fi
 }
 
@@ -462,7 +512,7 @@ function _amp_snapshot_restore() {
     echo "Missing SQL file: $sql_file" 1>&2
     exit 1
   fi
-  gunzip --stdout "$sql_file" | amp sql --root="$db_root" --name="$db_name"
+  gunzip --stdout "$sql_file" | cvutil_php_nodbg amp sql --root="$db_root" --name="$db_name"
 }
 
 
@@ -473,19 +523,116 @@ function amp_uninstall() {
 }
 
 ###############################################################################
+## Download APIv4, if it's not built into the target version of Civi
+## usage: api4_download_conditional <civicrm-path> <api4-path>
+function api4_download_conditional() {
+  cvutil_assertvars api4_download_conditional CIVI_VERSION CACHE_DIR
+  local civi_path="$1"
+  local api4_path="$2"
+
+  if [ -z "$api4_path" -o -z "$civi_path" ]; then
+    cvutil_fatal "Cannot download api4: Target path not specified"
+  fi
+
+  if [ ! -e "$civi_path" ]; then
+    cvutil_fatal "Cannot download api4: Must download civicrm-core first"
+  fi
+
+  if [ -e "$civi_path/Civi/Api4" ]; then
+    ## Circa 5.19.alpha, api4 is merged into core.
+    echo "Found api4 in core: "$civi_path/Civi/Api4""
+    return;
+  fi
+
+  case "$CIVI_VERSION" in
+    ## Circa v5.16 (3e20c1acb397d6dfe?), api4+core got into a bidrectional dependency, and api4@~4.5
+    ## seems to be the closest release that corresponds to the dev-periods of 5.16-5.18.
+    ## Circa v5.19.alpha1 (#15309), api4 should be merged into core.
+    master|5.16*|5.17*|5.18*|5.19*) git clone "${CACHE_DIR}/civicrm/api4.git" -b "4.5" "$api4_path" ;;
+    # 5.14*|5.15*) git clone "${CACHE_DIR}/civicrm/api4.git" -b "4.4" "$api4_path" ;;
+    *) echo "Skipping api4 download" ;; ## Shrug
+      ##EXTCIVIVER=$( php -r '$x=simplexml_load_file("civicrm/xml/version.xml"); echo $x->version_no;' )
+      ##cv dl -b "@https://civicrm.org/extdir/ver=$EXTCIVIVER|cms=Drupal|status=|ready=/org.civicrm.api4.xml" --to="$WEB_ROOT/web/sites/all/modules/civicrm/ext/api4" --dev
+  esac
+}
+
+## Allow common composer plugins
+function composer_allow_common_plugins() {
+  local PLG
+  for PLG in  "composer/installers"  "drupal/core-composer-scaffold" "drupal/core-project-message" "cweagans/composer-patches" "civicrm/civicrm-asset-plugin" "civicrm/composer-downloads-plugin" "civicrm/composer-compile-plugin" ; do
+    composer config --no-interaction allow-plugins."$PLG" true
+  done
+}
+
+###############################################################################
+## Download CiviCRM (via composer, into an existing D8/composer project)
+##
+## This function shouldn't be necessary in the long-term; but for testing
+## right now across different versions, we need some hackery/backporting,
+## and this allows one to avoid copy-pasting those fiddly bits.
+##
+## Be sure to "cd" into the root of the composer project, then call `civicrm_download_composer_d8`
+function civicrm_download_composer_d8() {
+  cvutil_assertvars civicrm_download_composer_d8 CIVI_VERSION CMS_VERSION
+
+  composer config 'extra.enable-patching' true
+  ## Ensure that we compile all our js as necessary
+  composer config extra.compile-mode all
+  composer config minimum-stability dev
+
+  local CIVI_VERSION_COMP=$(civicrm_composer_ver "$CIVI_VERSION")
+  local EXTRA_COMPOSER=()
+  local EXTRA_PATCH=()
+
+  case "$CIVI_VERSION" in
+    5.21*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; EXTRA_COMPOSER+=( "civicrm/civicrm-setup:0.4.0 as 0.2.99" ) ; EXTRA_COMPOSER+=( 'cache/integration-tests:dev-master#b97328797ab199f0ac933e39842a86ab732f21f9' ) ; EXTRA_PATCH+=( "https://github.com/civicrm/civicrm-core/pull/16328" ); ;;
+    5.22*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; EXTRA_COMPOSER+=( "civicrm/civicrm-setup:0.4.0 as 0.2.99" ) ; EXTRA_COMPOSER+=( 'cache/integration-tests:dev-master#b97328797ab199f0ac933e39842a86ab732f21f9' ) ; EXTRA_PATCH+=( "https://github.com/civicrm/civicrm-core/pull/16413" ); ;;
+    5.23*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; EXTRA_COMPOSER+=( 'cache/integration-tests:dev-master#b97328797ab199f0ac933e39842a86ab732f21f9' ); ;;
+    5.24*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; ;;
+    5.25*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; ;;
+    5.26*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; ;;
+    5.27*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; ;;
+    5.28*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; ;;
+    5.29*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; ;;
+    5.30*) EXTRA_COMPOSER+=( 'civicrm/civicrm-asset-plugin:~1.1' ) ; ;;
+    *) echo "No extra patches required" ; ;;
+  esac
+
+  case "$CMS_VERSION" in 
+    9.2*) echo 'No Extra Patch required' ; ;;
+    9.1*) echo 'No Extra Patch required' ; ;;
+    9*) echo 'No Extra Patch required' ; ;;
+    ^9) echo 'No Extra Patch required' ; ;;
+    8.9*) echo 'No Extra Patch required' ; ;;
+    *) EXTRA_COMPOSER+=( 'pear/pear_exception:1.0.1 as 1.0.0') ## weird conflict in drupal-composer/drupal-project
+  esac 
+
+  composer require "${EXTRA_COMPOSER[@]}" civicrm/civicrm-{core,packages,drupal-8}:"$CIVI_VERSION_COMP" --prefer-source
+  [ -n "$EXTRA_PATCH" ] && git scan am -N "${EXTRA_PATCH[@]}"
+
+  local civicrm_version_php=$(find -name civicrm-version.php)
+  if [ -f "$civicrm_version_php" ]; then
+    local civi_root=$(dirname "$civicrm_version_php")
+    #extract-url --cache-ttl 172800 vendor/civicrm/civicrm-core=http://download.civicrm.org/civicrm-l10n-core/archives/civicrm-l10n-daily.tar.gz ## Issue: Don't write directly into vendor tree
+    extract-url --cache-ttl 172800 "$civi_root=http://download.civicrm.org/civicrm-l10n-core/archives/civicrm-l10n-daily.tar.gz" ## Issue: Don't write directly into vendor tree
+  else
+    cvutil_fatal "Cannot download l10n data - failed to locate civicrm-core"
+  fi
+}
+
+###############################################################################
 ## Generate config files and setup database
 function civicrm_install() {
-  cvutil_assertvars civicrm_install CIVI_CORE CIVI_FILES CIVI_TEMPLATEC CIVI_DOMAIN_NAME CIVI_DOMAIN_EMAIL
+  cvutil_assertvars civicrm_install CIVI_CORE CIVI_FILES CIVI_TEMPLATEC
 
   if [ ! -d "$CIVI_CORE/bin" -o ! -d "$CIVI_CORE/CRM" ]; then
-    echo "Failed to locate valid civi root: $CIVI_CORE"
-    exit 1
+    cvutil_fatal "Failed to locate valid civi root: $CIVI_CORE"
   fi
 
   ## Create CiviCRM data dirs
-  amp datadir "$CIVI_FILES" "$CIVI_TEMPLATEC"
+  cvutil_php_nodbg amp datadir "$CIVI_FILES" "$CIVI_TEMPLATEC"
   if [ -n "$CIVI_EXT_DIR" ]; then
-    amp datadir "$CIVI_EXT_DIR"
+    cvutil_php_nodbg amp datadir "$CIVI_EXT_DIR"
   fi
 
   ## Create CiviCRM config files
@@ -500,15 +647,66 @@ function civicrm_install() {
     elif [ -e "xml" -a -e "bin/setup.sh" -a -z "$NO_SAMPLE_DATA" ]; then
       env SITE_ID="$SITE_ID" bash ./bin/setup.sh
     elif [ -e "sql/civicrm.mysql" -a -e "sql/civicrm_generated.mysql" -a -z "$NO_SAMPLE_DATA" ]; then
-      cat sql/civicrm.mysql sql/civicrm_generated.mysql | amp sql -Ncivi --root="$CMS_ROOT"
+      cat sql/civicrm.mysql sql/civicrm_generated.mysql | cvutil_php_nodbg amp sql -Ncivi --root="$CMS_ROOT"
     elif [ -e "sql/civicrm.mysql" -a -e "sql/civicrm_data.mysql" -a -n "$NO_SAMPLE_DATA" ]; then
-      cat sql/civicrm.mysql sql/civicrm_data.mysql | amp sql -Ncivi --root="$CMS_ROOT"
+      cat sql/civicrm.mysql sql/civicrm_data.mysql | cvutil_php_nodbg amp sql -Ncivi --root="$CMS_ROOT"
     else
       echo "Failed to locate civi SQL files"
     fi
   popd >> /dev/null
 
-  amp sql -Ncivi --root="$CMS_ROOT" <<EOSQL
+  civicrm_update_domain
+}
+
+###############################################################################
+## Generate config files and setup database. (Use either newer or older installer, depending on version).
+function civicrm_install_transitional() {
+  cvutil_assertvars civicrm_install CIVI_CORE
+
+  ## If installing an older version, provide continuity (for purposes of test matrices/contrib tests/etc).
+  if civicrm_check_ver '<' 5.57.alpha1 ; then
+
+    civicrm_install
+
+  ## Newer versions should use 'cv core:install' to match regular web-installer
+  else
+    # If you've switched branches and triggered `reinstall`, then you need to refresh composer deps/autoloader before installing
+    (cd "$CIVI_CORE" && composer install)
+
+    civicrm_install_cv
+
+    ## Generating `civicrm.config.php` is necessary for `extern/*.php` and its E2E tests
+    (cd "$CIVI_CORE" && ./bin/setup.sh -g)
+  fi
+}
+
+###############################################################################
+## Generate config files and setup database (via cv)
+function civicrm_install_cv() {
+  cvutil_assertvars civicrm_install CIVI_CORE CIVI_DB_DSN CMS_URL CIVI_SITE_KEY
+
+  if [ ! -d "$CIVI_CORE/bin" -o ! -d "$CIVI_CORE/CRM" ]; then
+    cvutil_fatal "Failed to locate valid civi root: $CIVI_CORE"
+  fi
+
+  local loadGenOpt
+  [ -n "$NO_SAMPLE_DATA" ] && loadGenOpt="" || loadGenOpt="-m loadGenerated=1"
+
+  cv core:install -vv -f --cms-base-url="$CMS_URL" --db="$CIVI_DB_DSN" -m "siteKey=$CIVI_SITE_KEY" $loadGenOpt
+  local settings=$( cv ev 'echo CIVICRM_SETTINGS_PATH;' )
+  cvutil_inject_settings "$settings" "civicrm.settings.d"
+  civicrm_update_domain
+
+  ## Enable development
+  civicrm_make_setup_conf
+  civicrm_make_test_settings_php
+}
+
+###############################################################################
+## Update the CiviCRM domain's name+email
+function civicrm_update_domain() {
+  cvutil_assertvars civicrm_install CIVI_DOMAIN_NAME CIVI_DOMAIN_EMAIL
+  cvutil_php_nodbg amp sql -Ncivi --root="$CMS_ROOT" <<EOSQL
     UPDATE civicrm_domain SET name = '$CIVI_DOMAIN_NAME';
     SELECT @option_group_id := id
       FROM civicrm_option_group n
@@ -521,14 +719,25 @@ EOSQL
 }
 
 ###############################################################################
+## Get a list of default permissions for anonymous users
+function civicrm_apply_d8_perm_defaults() {
+  ## FIXME: The lists need a better home.
+  drush8 -y role-create demoadmin
+  drush8 -y role-add-perm anonymous "access CiviMail subscribe/unsubscribe pages,access all custom data,access uploaded files,make online contributions,profile create,profile view,register for events"
+  drush8 -y role-add-perm demoadmin "access AJAX API,access all custom data,access CiviContribute,access CiviCRM,access CiviEvent,access CiviMail,access CiviMail subscribe/unsubscribe pages,access CiviMember,access CiviReport,access Contact Dashboard,access contact reference fields,access deleted contacts,access Report Criteria,save Report Criteria,access uploaded files,add contacts,administer CiviCRM,administer dedupe rules,administer Reports,administer reserved groups,administer reserved reports,administer reserved tags,administer Tagsets,delete activities,delete contacts,delete in CiviContribute,delete in CiviEvent,delete in CiviMail,delete in CiviMember,edit all contacts,view my contact,edit my contact,edit all events,edit contributions,edit event participants,edit message templates,edit groups,edit memberships,import contacts,make online contributions,manage tags,merge duplicate contacts,profile create,profile edit,profile listings,profile listings and forms,profile view,register for events,translate CiviCRM,view all activities,view all contacts,view all notes,view event info,view event participants,view public CiviMail content,administer payment processors,create manual batch,edit own manual batches,edit all manual batches,view own manual batches,view all manual batches,delete own manual batches,delete all manual batches,export own manual batches,export all manual batches"
+  drush8 -y role-add-perm demoadmin "access toolbar"
+}
+
+###############################################################################
 ## Appy more default values
 function civicrm_apply_demo_defaults() {
   if cv ev 'exit(version_compare(CRM_Utils_System::version(), "4.7.0", "<") ?0:1);' ; then
     cv api setting.create versionCheck=0 debug=1
   fi
   cv api MailSettings.create id=1 is_default=1 domain=example.org debug=1
+  cv en --ignore-missing 'civigrant'
   if [ -z "$NO_SAMPLE_DATA" ]; then
-    cv -vv ev 'eval(file_get_contents("php://stdin"));' <<EOPHP
+    cv -v ev 'eval(file_get_contents("php://stdin"));' <<EOPHP
       \$cid = civicrm_api3('Domain', 'getvalue', array(
         'id' => 1,
         'return' => 'contact_id'
@@ -546,6 +755,9 @@ function civicrm_apply_demo_defaults() {
         ),
       ));
 EOPHP
+  fi
+  if cv ev 'exit(version_compare(CRM_Utils_System::version(), "5.19.alpha", "<") ?0:1);' ; then
+    cv en --ignore-missing api4
   fi
 }
 
@@ -588,6 +800,8 @@ function civicrm_make_settings_php() {
     | sed "s;%%testPass%%;${TEST_DB_PASS};" \
     | sed "s;%%testUser%%;${TEST_DB_USER};" \
     | sed "s;%%siteKey%%;${CIVI_SITE_KEY};" \
+    | sed "s;%%credKeys%%;aes-cbc::${CIVI_CRED_KEY};" \
+    | sed "s;%%signKeys%%;jwt-hs256::${CIVI_SIGN_KEY};" \
     | sed "s;%%templateCompileDir%%;${CIVI_TEMPLATEC};" \
     > "$CIVI_SETTINGS"
   echo >> "$CIVI_SETTINGS"
@@ -631,6 +845,11 @@ function civicrm_make_setup_conf() {
     # DBADD=
     GENCODE_CMS="$CIVI_UF"
 EOF
+
+  if [ -n "$GENCODE_CONFIG_TEMPLATE" ]; then
+    echo "GENCODE_CONFIG_TEMPLATE=\"$GENCODE_CONFIG_TEMPLATE\"" >> "$CIVI_CORE/bin/setup.conf"
+    echo "export GENCODE_CONFIG_TEMPLATE" >> "$CIVI_CORE/bin/setup.conf"
+  fi
 }
 
 ###############################################################################
@@ -711,6 +930,64 @@ EOF
 }
 
 ###############################################################################
+## Determine the version# of the CiviCRM codebase
+## usage: civicrm_get_ver <path>
+## ex:    ver=$(civicrm_get_ver .)
+## ex:    ver=$(civicrm_get_ver /var/www/sites/all/modules/civicrm)
+function civicrm_get_ver() {
+  pushd "$1" >> /dev/null
+    if [ -f xml/version.xml ]; then
+      ## Works in any git-based build, even if gencode hasn't run yet.
+      php -r 'echo simplexml_load_file("xml/version.xml")->version_no;'
+    else
+      ## works in any tar-based build.
+      php -r 'require "civicrm-version.php"; $a = civicrmVersion(); echo $a["version"];'
+    fi
+  popd >> /dev/null
+}
+
+###############################################################################
+## Check if the civicrm matches some condition
+## usage: civicrm_check_ver <op> <target>
+## example: if civicrm_check_ver '>=' '5.43' ; then echo NEW; else echo OLD; fi
+function civicrm_check_ver() {
+  cvutil_assertvars civicrm_check_ver CIVI_CORE
+  local ver=$( civicrm_get_ver "$CIVI_CORE" )
+  if env ACTUAL="$ver" OP="$1" EXPECT="$2" php -r 'exit(version_compare(getenv("ACTUAL"), getenv("EXPECT"), getenv("OP"))?0:1);'; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+###############################################################################
+## usage: civicrm_ext_download_bare <key> <path>
+function civicrm_ext_download_bare() {
+  local civiVer=$(civicrm_get_ver .)
+  cv dl -b "@https://civicrm.org/extdir/ver=$civiVer|cms=Drupal/$1.xml" --to="$2"
+}
+
+###############################################################################
+## usage: Convert a CiviCRM version branch/tag expression to a composer version expression
+## example: civicrm_composer_ver master ==> "dev-master"
+function civicrm_composer_ver() {
+  local branchTag="$1"
+  if [[ "$branchTag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ## Specific tag versions don't need to be changed.
+    echo "$branchTag"
+  elif [[ "$branchTag" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    ## Numeric branches get a dev suffix
+    echo "$branchTag.x-dev"
+  elif [[ "$branchTag" =~ dev ]]; then
+    ## "dev-" indicates that the caller has already put into composer notation.
+    echo "$branchTag"
+  else
+    ## Non-numeric branches get a dev prefix
+    echo "dev-$branchTag"
+  fi
+}
+
+###############################################################################
 ## Generate config files and setup database
 function wp_install() {
   cvutil_assertvars wp_install CMS_ROOT CMS_DB_NAME CMS_DB_USER CMS_DB_PASS CMS_DB_HOST CMS_URL ADMIN_USER ADMIN_PASS ADMIN_EMAIL CMS_TITLE
@@ -744,7 +1021,7 @@ PHP
 
     ## Create WP data dirs
     cvutil_mkdir "wp-content/plugins/modules"
-    amp datadir "wp-content/plugins/files" "wp-content/uploads/"
+    cvutil_php_nodbg amp datadir "wp-content/plugins/files" "wp-content/uploads/"
 
     cvutil_inject_settings "wp-config.php" "wp-config.d"
   popd >> /dev/null
@@ -767,7 +1044,7 @@ function wp_uninstall() {
 function backdrop_install() {
   cvutil_assertvars backdrop_install CMS_ROOT SITE_ID CMS_TITLE CMS_DB_USER CMS_DB_PASS CMS_DB_HOST CMS_DB_NAME ADMIN_USER ADMIN_PASS CMS_URL
   pushd "$CMS_ROOT" >> /dev/null
-    amp datadir "files" "${PRIVATE_ROOT}/"
+    cvutil_php_nodbg amp datadir "files" "${PRIVATE_ROOT}/"
 
     CMS_DB_HOSTPORT=$(cvutil_build_hostport "$CMS_DB_HOST" "$CMS_DB_PORT")
     ./core/scripts/install.sh "$@" \
@@ -800,6 +1077,56 @@ function backdrop_uninstall() {
   fi
 }
 
+###############################################################################
+## Backdrop - Create a user
+## usage: backdrop_user USERNAME EMAIL PASSWORD
+function backdrop_user() {
+  env NEW_USER="$1" NEW_EMAIL="$2" NEW_PASS="$3" \
+    cv ev --level=cms-only --user=admin '$ps=["name"=>getenv("NEW_USER"), "mail"=>getenv("NEW_EMAIL"), "pass"=>getenv("NEW_PASS")]; $u=entity_create("user", $ps); $u->save();'
+}
+
+###############################################################################
+## Add a role to a user
+## usage: backdrop_user_role USERNAME ROLENAME
+function backdrop_user_role() {
+  echo 'INSERT IGNORE INTO users_roles (uid,role) SELECT uid, @ENV[THE_ROLE] FROM users WHERE name = @ENV[THE_USER];' \
+    | env THE_USER="$1" THE_ROLE="$2" amp sql -Ncms -e
+}
+
+###############################################################################
+## Backdrop - Download to WEB_ROOT/web. Apply core patches (eg for MySQL 8) as required.
+function backdrop_download() {
+  cvutil_assertvars backdrop_download WEB_ROOT CMS_VERSION PRJDIR CACHE_DIR
+  echo "[[Download Backdrop]]"
+  mkdir "$WEB_ROOT"
+  git clone "$CACHE_DIR/backdrop/backdrop.git" "$WEB_ROOT/web" -b "$CMS_VERSION"
+
+  # See: https://github.com/backdrop/backdrop/pull/3018
+  pushd "$WEB_ROOT/web/core/includes/database/mysql"
+    if grep -q 'NO_AUTO_CREATE_USER' database.inc; then
+      patch database.inc < "$PRJDIR/app/drupal-patches/mysql8-drupal.patch"
+    fi
+  popd
+}
+
+###############################################################################
+## Drupal - Download to WEB_ROOT/web. Apply core patches (eg for MySQL 8) as required.
+function drupal_download() {
+  cvutil_assertvars drupal_download WEB_ROOT CMS_VERSION PRJDIR
+  mkdir "$WEB_ROOT"
+  drush8 -y dl drupal-${CMS_VERSION} --destination="$WEB_ROOT" --drupal-project-rename
+  mv "$WEB_ROOT/drupal" "$WEB_ROOT/web"
+
+  case $CMS_VERSION in
+    7*)
+     # See: https://www.drupal.org/project/drupal/issues/2978575
+     pushd "$WEB_ROOT/web/includes/database/mysql"
+       if ! grep -q 'escapeAlias' database.inc; then
+         patch database.inc < "$PRJDIR/app/drupal-patches/mysql8-drupal.patch"
+       fi
+     popd
+  esac
+}
 
 ###############################################################################
 ## Drupal -- Generate config files and setup database
@@ -833,7 +1160,7 @@ function drupal7_install() {
     chmod u-w "sites/$DRUPAL_SITE_DIR/settings.php"
 
     ## Setup extra directories
-    amp datadir "sites/${DRUPAL_SITE_DIR}/files" "${PRIVATE_ROOT}/${DRUPAL_SITE_DIR}"
+    cvutil_php_nodbg amp datadir "sites/${DRUPAL_SITE_DIR}/files" "${PRIVATE_ROOT}/${DRUPAL_SITE_DIR}"
     cvutil_mkdir "sites/${DRUPAL_SITE_DIR}/modules"
     drush vset --yes file_private_path "${PRIVATE_ROOT}/${DRUPAL_SITE_DIR}"
     [ -n "$APACHE_VHOST_ALIAS" ] && cvutil_ed .htaccess '# RewriteBase /$' 's;# RewriteBase /$;RewriteBase /;'
@@ -849,7 +1176,8 @@ function drupal8_install() {
   DRUPAL_SITE_DIR=$(_drupal_multisite_dir "$CMS_URL" "$SITE_ID")
   CMS_DB_HOSTPORT=$(cvutil_build_hostport "$CMS_DB_HOST" "$CMS_DB_PORT")
   pushd "$CMS_ROOT" >> /dev/null
-    [ -f "sites/$DRUPAL_SITE_DIR/settings.php" ] && rm -f "sites/$DRUPAL_SITE_DIR/settings.php"
+    [ -d "sites/$DRUPAL_SITE_DIR" ] && chmod u+w "sites/$DRUPAL_SITE_DIR"
+    [ -f "sites/$DRUPAL_SITE_DIR/settings.php" ] && chmod u+w "sites/$DRUPAL_SITE_DIR/settings.php" && rm -f "sites/$DRUPAL_SITE_DIR/settings.php"
 
     drush8 site-install -y "$@" \
       --db-url="mysql://${CMS_DB_USER}:${CMS_DB_PASS}@${CMS_DB_HOSTPORT}/${CMS_DB_NAME}" \
@@ -860,11 +1188,11 @@ function drupal8_install() {
       --sites-subdir="$DRUPAL_SITE_DIR"
     chmod u+w "sites/$DRUPAL_SITE_DIR"
     chmod u+w "sites/$DRUPAL_SITE_DIR/settings.php"
-    cvutil_inject_settings "$CMS_ROOT/sites/$DRUPAL_SITE_DIR/settings.php" "drupal.settings.d"
+    cvutil_inject_settings "$CMS_ROOT/sites/$DRUPAL_SITE_DIR/settings.php" "drupal.settings.d" "global \$settings; \$civibuild['DRUPAL_SITE_DIR'] = '$DRUPAL_SITE_DIR';"
     chmod u-w "sites/$DRUPAL_SITE_DIR/settings.php"
 
     ## Setup extra directories
-    amp datadir "sites/${DRUPAL_SITE_DIR}/files" "${PRIVATE_ROOT}/${DRUPAL_SITE_DIR}"
+    cvutil_php_nodbg amp datadir "sites/${DRUPAL_SITE_DIR}/files" "${PRIVATE_ROOT}/${DRUPAL_SITE_DIR}"
     cvutil_mkdir "sites/${DRUPAL_SITE_DIR}/modules"
     [ -n "$APACHE_VHOST_ALIAS" ] && cvutil_ed .htaccess '# RewriteBase /$' 's;# RewriteBase /$;RewriteBase /;'
   popd >> /dev/null
@@ -939,6 +1267,152 @@ function drupal8_uninstall() {
 }
 
 ###############################################################################
+## Drupal 7 - Download PO files for drupal modules.
+##
+## This is similar to "l10n_update", but it doesn't require an active D7 site or database,
+## so it works well with 'download' phase and with a shared cache.
+##
+## Usage: drupal7_po_download <language-list> <translation-projects...>
+## Example: drupal7_po_download de_DE,fr_FR,nl_NL drupal-7.x views-7.x-3.x
+function drupal7_po_download() {
+  cvutil_assertvars drupal7_po_download WEB_ROOT
+  local SPOOL="${WEB_ROOT}/web/sites/all/translations"
+  _drupalx_po_download "$SPOOL" "$@"
+}
+
+###############################################################################
+## Drupal 7 - Load PO files into database
+##
+## Find any "*.po" files in D7 (sites/all/translations/*.po). Activate the associated languages and import the strings.
+##
+## Usage: drupal7_po_import
+function drupal7_po_import() {
+  cvutil_assertvars drupal7_po_import WEB_ROOT
+  local SPOOL="${WEB_ROOT}/web/sites/all/translations"
+  _drupalx_po_import "$SPOOL" "$@"
+}
+
+###############################################################################
+## Drupal 8 - Download PO files for drupal modules.
+##
+## Usage: drupal8_po_download <language-list> <translation-projects...>
+## Example: drupal8_po_download de_DE,fr_FR,nl_NL drupal-8.x
+function drupal8_po_download() {
+  cvutil_assertvars drupal8_po_download WEB_ROOT
+  local SPOOL="${WEB_ROOT}/share/translations"
+  _drupalx_po_download "$SPOOL" "$@"
+}
+
+###############################################################################
+## Drupal 8 - Load PO files into database
+##
+## Find any "*.po" files in D8 (l10n/*.po). Activate the associated languages and import the strings.
+##
+## Usage: drupal8_po_import
+function drupal8_po_import() {
+  cvutil_assertvars drupal8_po_import WEB_ROOT
+  local SPOOL="${WEB_ROOT}/share/translations"
+  echo "FIXME: The function drupal8_po_import() should be updated to handle imports on Drupal 8+" > "$SPOOL/FIXME.txt"
+  echo "WARNING: Skipped drupal8_po_import(). Not yet supported on Backdrop." 1>&2
+  # Issue: At time of writing, our copy of drush-language doesn't seem to work on Drupal 9.
+  #_drupalx_po_import "$SPOOL" "$@"
+}
+
+###############################################################################
+## Backdrop - Download PO files for Backdrop modules.
+##
+## Usage: backdrop_po_download <language-list> <translation-projects...>
+## Example: backdrop_po_download de_DE,fr_FR,nl_NL backdropcms-1.23
+function backdrop_po_download() {
+  cvutil_assertvars backdrop_po_download WEB_ROOT
+  #local SPOOL="${WEB_ROOT}/web/files/translations"  ## Suggested by some BD docs, but it doesn't seem to be required, and it's extraneously wiped on reinstalls.
+  local SPOOL="${WEB_ROOT}/web/sites/all/translations"
+  _drupalx_po_download "$SPOOL" "$@"
+}
+
+###############################################################################
+## Backdrop - Load PO files into database
+##
+## Usage: backdrop_po_import
+function backdrop_po_import() {
+  cvutil_assertvars backdrop_po_download WEB_ROOT
+  #local SPOOL="${WEB_ROOT}/web/files/translations"  ## Suggested by some BD docs, but it doesn't seem to be required, and it's extraneously wiped on reinstalls.
+  local SPOOL="${WEB_ROOT}/web/sites/all/translations"
+  echo "FIXME: The function backdrop_po_import() should be updated to handle imports on Backdrop" > "$SPOOL/FIXME.txt"
+  echo "WARNING: Skipped backdrop_po_import(). Not yet supported on Backdrop." 1>&2
+  # Issue: At time of writing, our copy of drush-language doesn't seem to work on Backdrop.
+  #_drupalx_po_import "$SPOOL" "$@"
+}
+
+###############################################################################
+## D7/BD - Download PO files
+##
+## Usage: _drupalx_po_download <spool-dir> <language-list> <translation-projects...>
+## Example: _drupalx_po_download "$WEB_ROOT/translations" "de_DE,fr_FR,nl_NL" drupal-7.x views-7.x-3.x
+function _drupalx_po_download() {
+  local SPOOL="$1"
+  shift
+  local CSV="$1"
+  local TTL=86400
+  shift
+  local NEW_LOCALES=$( echo "$CSV" | awk 'BEGIN {RS=","; FS="_"} {print $1}' | sort -u | grep -v ^en )
+  if [ -z "$NEW_LOCALES" ]; then
+    return
+  fi
+
+  mkdir -p "${SPOOL}"
+
+  for NEW_LOCALE in $NEW_LOCALES; do
+    for TARGET in "$@" ; do
+
+      ## Download PO files. Retain in a cache. Install to the $SPOOL dir.
+      ## ex: devel-7.x-1.x     ==>  https://ftp.drupal.org/files/translations/7.x/devel/devel-7.x-1.x.fr.po                      ==>  SPOOL/devel-7.x-1.x.fr.po
+      ## ex: devel-5.0.x       ==>  https://ftp.drupal.org/files/translations/all/devel/devel-5.0.x.fr.po                        ==>  SPOOL/devel-5.0.x.fr.po
+      ## ex: drupal-7.x        ==>  https://ftp.drupal.org/files/translations/7.x/drupal/drupal-7.x.fr.po                        ==>  SPOOL/drupal-7.x.fr.po
+      ## ex: backdropcms-1.23  ==>  https://localize.backdropcms.org/files/l10n_packager/1.23/backdropcms/backdropcms-1.23.fr.po ==>  SPOOL/backdropcms-1.23.fr.po
+
+      if [[ $TARGET =~ ([a-zA-Z0-9_]+)-(.*) ]]; then
+        local PROJECT="${BASH_REMATCH[1]}"
+        local VERSION="${BASH_REMATCH[2]}"
+
+        local PO_SET=$( [[ "$VERSION" == *"7.x"* ]] && echo 7.x || echo all )
+        local PO_URL="https://ftp.drupal.org/files/translations/${PO_SET}/${PROJECT}/${TARGET}.${NEW_LOCALE}.po"
+        if [ "$PROJECT" = "backdropcms" ]; then
+          PO_URL="https://localize.backdropcms.org/files/l10n_packager/${VERSION}/backdropcms/backdropcms-${VERSION}.${NEW_LOCALE}.po"
+        fi
+
+        http_cache_setup "$PO_URL" "${CACHE_DIR}/drupal/translations/${TARGET}.${NEW_LOCALE}.po" "$TTL"
+        cp "${CACHE_DIR}/drupal/translations/${TARGET}.${NEW_LOCALE}.po" "${SPOOL}/"
+      fi
+    done
+  done
+}
+
+###############################################################################
+## D7/BD - Load PO files
+##
+## Find any "*.po" files in BD (files/translations/*.po). Activate the associated languages and import the strings.
+##
+## usage: _drupalx_po_import <spool-dir>
+function _drupalx_po_import() {
+  local SPOOL="$1"
+
+  ## Find any files named '*.XX.po` (eg `webform-4.x.fr.po`). The `XX` locale should be active.
+  local NEW_LOCALES=$(find "${SPOOL}" -name '*.po' | sed 's;\(.*\)\.\(\w\w\)\.po;\2;' | sort -u)
+  drush en -y locale
+  if [ -z "$NEW_LOCALES" ]; then
+    return
+  fi
+  drush language-add $NEW_LOCALES
+
+  for NEW_LOCALE in $NEW_LOCALES ; do
+    find "${SPOOL}" -name "*.${NEW_LOCALE}.po" | while read POFILE ; do
+      drush language-import-translations "${NEW_LOCALE}" "${POFILE}"
+    done
+  done
+}
+
+###############################################################################
 ## Drupal -- Compute the name of the multi-site subdir
 ## Usage: _drupal_multisite_dir <url> <site-id>
 ## Note: <site-id> is 0 for the default/base site
@@ -948,6 +1422,86 @@ function _drupal_multisite_dir() {
   else
     php -r '$p = parse_url($argv[1]); if (!empty($p["port"])) echo $p["port"] . "."; echo $p["host"];' -- "$1"
   fi
+}
+
+###############################################################################
+## Drupal vX - Determine version of the codebase
+## usage: _drupalx_version <x|x.y|x.y.z>
+## example: VER=$(_drupalx_version x.y)
+function _drupalx_version() {
+  pushd "${WEB_ROOT}" >> /dev/null
+    ## Is it Backdrop?
+    if [ -e "web/core/modules/layout/layout.module" ]; then
+      case "$1" in
+        x)
+          php -r 'require_once "web/core/includes/bootstrap.inc"; [$x]=explode(".",BACKDROP_VERSION); echo "$x\n";'
+          return
+          ;;
+
+        x.y)
+          php -r 'require_once "web/core/includes/bootstrap.inc"; [$x,$y]=explode(".",BACKDROP_VERSION); echo "$x.$y\n";'
+          return
+          ;;
+
+        x.y-1)
+          ## Find the "x.y" version, and rewind by 1. This is useful if you have checked out developmental/pre-release and need a resource from the prior stable.
+          php -r 'require_once "web/core/includes/bootstrap.inc"; [$x,$y]=explode(".",BACKDROP_VERSION); $y--; echo "$x.$y\n";'
+          return
+          ;;
+
+        x.y.z)
+          php -r 'require_once "web/core/includes/bootstrap.inc"; [$x,$y,$z]=explode(".",BACKDROP_VERSION); echo "$x.$y.$z\n";'
+          return
+          ;;
+      esac
+    fi
+    ## Is it Drupal 7?
+    if [ -e "web/modules/system/system.module" ]; then
+      case "$1" in
+        x)
+          php -r 'require_once "web/includes/bootstrap.inc"; [$x]=explode(".",VERSION); echo "$x\n";'
+          return
+          ;;
+
+        x.y|x.y.z)
+          ## Note: d7 releases don't use third digit, so x.y is a full/canonical version.
+          php -r 'require_once "web/includes/bootstrap.inc"; [$x,$y]=explode(".",VERSION); echo "$x.$y\n";'
+          return
+          ;;
+
+        x.y-1)
+          ## Find the "x.y" version, and rewind by 1. This is useful if you have checked out developmental/pre-release and need a resource from the prior stable.
+          php -r 'require_once "web/includes/bootstrap.inc"; [$x,$y]=explode(".",VERSION); $y--; echo "$x.$y\n";'
+          return
+          ;;
+      esac
+    fi
+    ## Is it D8+?
+    if [ -e "web/core/core.services.yml" ]; then
+      case "$1" in
+        x)
+          php -r '$l = require "vendor/composer/installed.php"; [$x] = explode(".", $l["versions"]["drupal/core"]["pretty_version"]); echo "$x\n";'
+          return
+          ;;
+
+        x.y)
+          php -r '$l = require "vendor/composer/installed.php"; [$x,$y] = explode(".", $l["versions"]["drupal/core"]["pretty_version"]); echo "$x.$y\n";'
+          return
+          ;;
+
+        x.y-1)
+          php -r '$l = require "vendor/composer/installed.php"; [$x,$y] = explode(".", $l["versions"]["drupal/core"]["pretty_version"]); $y--; echo "$x.$y\n";'
+          return
+          ;;
+
+        x.y.z)
+          php -r '$l = require "vendor/composer/installed.php"; [$x,$y,$z] = explode(".", $l["versions"]["drupal/core"]["pretty_version"]); echo "$x.$y.$z\n";'
+          return
+          ;;
+
+      esac
+    fi
+  popd >> /dev/null
 }
 
 ###############################################################################
@@ -1005,7 +1559,7 @@ function git_cache_setup() {
   fi
 
   cvutil_makeparent "$lock"
-  if pidlockfile.php "$lock" $$ $CACHE_LOCK_WAIT ; then
+  if cvutil_php_nodbg pidlockfile.php "$lock" $$ $CACHE_LOCK_WAIT ; then
     php -r 'echo time();' > $lastrun
     if [ ! -d "$cachedir" ]; then
       ## clone
@@ -1072,6 +1626,7 @@ function joomla_install() {
     --overwrite \
     --skip-exists-check \
     "$child"
+  cvutil_php_nodbg amp datadir "$CMS_ROOT/logs" "$CMS_ROOT/tmp"
 }
 
 ###############################################################################
@@ -1105,7 +1660,7 @@ function svn_cache_setup() {
   fi
 
   cvutil_makeparent "$lock"
-  if pidlockfile.php "$lock" $$ $CACHE_LOCK_WAIT ; then
+  if cvutil_php_nodbg pidlockfile.php "$lock" $$ $CACHE_LOCK_WAIT ; then
     php -r 'echo time();' > $lastrun
     if [ ! -d "$cachedir" ]; then
       ## clone

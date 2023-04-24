@@ -4,13 +4,11 @@
 
 ###############################################################################
 
-[ -z "$CMS_VERSION" ] && CMS_VERSION=7.x
-MAKEFILE="${TMPDIR}/${SITE_TYPE}/${SITE_NAME}/${SITE_ID}.make"
-cvutil_makeparent "$MAKEFILE"
-cat "$SITE_CONFIG_DIR/drush.make.tmpl" \
-  | sed "s;%%CACHE_DIR%%;${CACHE_DIR};" \
-  | sed "s;%%CIVI_VERSION%%;${CIVI_VERSION};" \
-  | sed "s;%%CMS_VERSION%%;${CMS_VERSION};" \
-  > "$MAKEFILE"
+[ -z "$CMS_VERSION" ] && CMS_VERSION=7
 
-drush -y make --working-copy "$MAKEFILE" "$WEB_ROOT"
+drupal_download
+
+pushd "$WEB_ROOT/web"
+  drush dl -y libraries-1.0 views-3.7 devel-1.x
+  drupal7_po_download "${CIVICRM_LOCALES:-de_DE}" drupal-7.x views-7.x-3.x devel-7.x-1.x
+popd

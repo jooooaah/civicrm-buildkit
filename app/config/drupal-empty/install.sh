@@ -2,6 +2,10 @@
 
 ## install.sh -- Create config files and databases; fill the databases
 
+## Transition: Old builds don't have "web/" folder. New builds do.
+## TODO: Simplify sometime after Dec 2019
+[ -d "$WEB_ROOT/web" ] && CMS_ROOT="$WEB_ROOT/web"
+
 ###############################################################################
 ## Create virtual-host and databases
 
@@ -15,12 +19,13 @@ drupal_install
 ###############################################################################
 ## Extra configuration
 DRUPAL_SITE_DIR=$(_drupal_multisite_dir "$CMS_URL" "$SITE_ID")
-pushd "${WEB_ROOT}/sites/${DRUPAL_SITE_DIR}" >> /dev/null
+pushd "${CMS_ROOT}/sites/${DRUPAL_SITE_DIR}" >> /dev/null
 
   drush -y updatedb
   drush -y en toolbar locale garland
   ## disable annoying/unneeded modules
   drush -y dis overlay
+  drupal7_po_import
 
   ## Setup theme
   #above# drush -y en garland

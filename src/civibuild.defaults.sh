@@ -9,11 +9,27 @@
 ## The location of the civicrm-buildkit binaries
 # BINDIR=
 
-## A place to store temp files (PRJDIR/app/tmp)
+## A place to store temp files
+## (default-git: PRJDIR/app/tmp)
+## (default-sys: CIVIBUILD_HOME/.civibuild/tmp
 # TMPDIR=
 
-## A place to put sites that we build (PRJDIR/build)
+## A place to put sites that we build
+## (default-git: PRJDIR/build)
+## (default-sys: CIVIBUILD_HOME)
 # BLDDIR=
+
+###############################################################################
+## External variables (inherited from user's shell environment)
+
+## Location of all mutable files (site-builds, logs, tmp data, etc).
+## If blank/omitted, then use a default file structure relative to `civibuild`'s bin.
+# CIVIBUILD_HOME=
+
+## When looking for instructions to do a build, search this list of folders.
+## (example: $HOME/.civibuild/types:/etc/civibuild/types:/usr/share/buildkit/app/config)
+## (note: The built-in folder "$PRJDIR/app/config" is automatically appended.)
+# CIVIBUILD_PATH=
 
 ###############################################################################
 ## Common variables
@@ -27,7 +43,7 @@ SITE_NAME=
 ## Codename for the build scripts (default: $SITE_NAME)
 SITE_TYPE=
 
-## Location of the build scripts (default: app/config/$SITE_TYPE)
+## Location of the build scripts (default: search $CIVIBUILD_PATH for $SITE_TYPE)
 SITE_CONFIG_DIR=
 
 ## Optional identifier to distinguish subsites in a multi-site build
@@ -38,16 +54,22 @@ SITE_ID=default
 ## (default: random)
 SITE_TOKEN=
 
-## Root directory where the site's code will be installed
+## Root directory where civibuild should put all downloaded code/files for this build
 ## (default: BLDDIR/SITE_NAME)
+##
+## Counter-intuitively, WEB_ROOT can be -- but is not necessarily -- the HTTP document root.  The
+## the HTTP document root may be a subdir (e.g.  "./web" or "./htdocs"). That folder is
+## specifically identified as CMS_ROOT.
 WEB_ROOT=
 
 ## Root directory where the site can put private (unpublished) data files
-## (default: app/private/SITE_NAME)
+## (default-git: app/private/SITE_NAME )
+## (default-sys: WEB_ROOT/.civibuild/private)
 PRIVATE_ROOT=
 
 ## Root directory where we store cached copies of git repositories
-## (default: TMPDIR/git-cache)
+## (default-git: TMPDIR/git-cache)
+## (default-sys: CIVIBUILD_HOME/.civibuild/cache)
 CACHE_DIR=
 
 ## Time to wait before allowing updates to git/svn caches (seconds)
@@ -85,6 +107,14 @@ CMS_TITLE=
 ## The Drupal/WordPress/Joomla version (default: discretionary)
 CMS_VERSION=
 
+## Store credentials in encrypted format
+## (default: randomly generated)
+CIVI_CRED_KEY=
+
+## Digital signatures
+## (default: randomly generated)
+CIVI_SIGN_KEY=
+
 ## The CiviCRM API (default: randomly generated)
 CIVI_SITE_KEY=
 
@@ -104,11 +134,11 @@ EXTRA_DLS=
 EXT_DLs=
 
 ## A template for picking the default URL (using variable "SITE_NAME").
-## Ex: "http://%SITE_NAME%.dev"
+## Ex: "http://%SITE_NAME%.test"
 ## Ex: "%AUTO%"
 ##
 ## In "%AUTO%", normal sites use amp default (e.g. http://localhost:7979)
-## but aliase use "http://%SITE_NAME%.dev". This is for backward compatibility.
+## but aliase use "http://%SITE_NAME%.test". This is for backward compatibility.
 URL_TEMPLATE='%AUTO%'
 
 ###############################################################################
@@ -119,8 +149,13 @@ URL_TEMPLATE='%AUTO%'
 ## (suggested: autogenerate via amp)
 CMS_URL=
 
-## Path to the base of the CMS
+## Path to the CMS's public-facing web content -- i.e. the HTTP document root.
 ## (default: WEB_ROOT)
+## (suggested: WEB_ROOT/web)
+##
+## The CMS_ROOT can be -- but is not necessarily -- the root folder into which all files were
+## downloaded.  The HTTP document root may be a subdir (e.g.  "./web" or "./htdocs").
+## If you specifically need the folder into which code was downloaded, see WEB_ROOT.
 CMS_ROOT=
 
 ## DB credentials for CMS
@@ -172,6 +207,9 @@ CIVI_EXT_DIR=
 ## URL of the web-managed extension folder (required iff CIVI_EXT_DIR is set)
 CIVI_EXT_URL=
 
+## List of extensions to enable on `*-demo` builds
+CIVI_DEMO_EXTS='civirules civisualize cividiscount org.civicrm.search_kit org.civicrm.search org.civicrm.contactlayout org.civicrm.angularprofiles org.civicrm.volunteer civicrm_admin_ui message_admin org.civicrm.afform org.civicrm.afform_admin'
+
 ## DB credentials for Civi test DB
 ## (suggested: autogenerate via 'amp create -f --root="$WEB_ROOT" --name=civi --prefix=TEST_ --skip-url')
 TEST_DB_DSN=
@@ -187,7 +225,9 @@ TEST_DB_PERM=super
 ## snapshot-related variables
 ## (also used for cloning)
 
-## Path to the directory which stores snapshots (default: PRJDIR/app/snapshot) [non-persistent]
+## Path to the directory which stores snapshots
+## (default-git: PRJDIR/app/snapshot) [non-persistent]
+## (default-sys: CIVIBUILD_HOME/.civibuild/snapshot) [non-persistent]
 SNAPSHOT_DIR=
 
 ## Name of the subdirectory containing the snapshot (default: SITE_NAME) [non-persistent]
@@ -215,12 +255,17 @@ TEST_SQL_SKIP=
 CLONE_ID=
 
 ## Base directory in whch we store clones metadata
-## [default: app/clone/$SITE_NAME/$SITE_ID ]
+## (default-git: app/clone/$SITE_NAME/$SITE_ID)
+## (default-sys: WEB_ROOT/.civibuild/clone/$SITE_ID)
 CLONE_ROOT=
 
 ## Directory storing the activty clone's metadata
 ## [default: $CLONE_ROOT/$CLONE_ID]
 CLONE_DIR=
+
+###############################################################################
+## PHPUnit Info variables
+PHPUNIT_TGT_EXT=
 
 ###############################################################################
 ## Upgrade-testing variables
@@ -238,11 +283,13 @@ UPGRADE_LOG_DIR=
 SHOW_HTML=
 
 ## Path to the last git summary file (from "git scan export")
-## (Default: TMPDIR/git-scan-$SITE_NAME-last.json)
+## (default-git: TMPDIR/git-scan-$SITE_NAME-last.json)
+## (default-sys: WEB_ROOT/.civibuild/git-scan-last.json)
 SHOW_LAST_SCAN=
 
 ## Path to which we will write a new git summary file (using "git scan export")
-## (Default: TMPDIR/git-scan-$SITE_NAME-new.json)
+## (default-git: TMPDIR/git-scan-$SITE_NAME-new.json)
+## (default-sys: WEB_ROOT/.civibuild/git-scan-new.json)
 SHOW_NEW_SCAN=
 
 ###############################################################################
@@ -259,7 +306,7 @@ PERSISTENT_VARS="
   CIVI_SETTINGS CIVI_FILES CIVI_TEMPLATEC CIVI_UF
   IS_INSTALLED
   EXT_DLS
-  SITE_TOKEN SITE_TYPE
+  CIVI_CRED_KEY CIVI_SIGN_KEY SITE_TOKEN SITE_TYPE
 "
 # ignore: runtime options like CIVI_SQL_SKIP and FORCE_DOWNLOAD
 
@@ -273,8 +320,11 @@ DECLARED_ACTIONS="
   destroy
   download dl
   edit
+  env-info
   install reinstall
   list
+  phpunit-info
+  run
   show
   snapshot snapshots
   restore restore-all

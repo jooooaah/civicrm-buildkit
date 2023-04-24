@@ -16,14 +16,19 @@ civibuild [options] command
   [32mshow[0m                  Show key details about the build
  [33mSnapshots[0m
   [32msnapshots[0m             List available snapshots
-  [32msnapshot[0m              Restore a snapshot of the CMS+CRM DBs
+  [32msnapshot[0m              Create a snapshot of the CMS+CRM DBs
   [32mrestore[0m               Restore a snapshot of the CMS+CRM DBs
   [32mrestore-all[0m           Restore *all* HTTP/DB services from their respective snapshots
  [33mClones[0m
   [32mclone-create[0m          Create a database clone based on a build or snapshot
   [32mclone-show[0m            Display a database clone's DSN settings
   [32mclone-destroy[0m         Destroy a database clone
-
+ [33mOther[0m
   [32mcache-warmup[0m          Proactively update git cache
+  [32menv-info[0m              Summarize the local build environment
+  [32mphpunit-info[0m          Show configuration tips on using PHPUnit
   [32mupgrade-test[0m          Loads each DB snapshot and runs the current upgrade logic
+
+[33mNB:[0m For more civibuild documentation see https://docs.civicrm.org/dev/en/latest/tools/civibuild/
+
 [0m

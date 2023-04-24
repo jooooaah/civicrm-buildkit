@@ -2,6 +2,10 @@
 
 ## install.sh -- Create config files and databases; fill the databases
 
+## Transition: Old builds don't have "web/" folder. New builds do.
+## TODO: Simplify sometime after Dec 2019
+[ -d "$WEB_ROOT/web" ] && CMS_ROOT="$WEB_ROOT/web"
+
 ###############################################################################
 ## Create virtual-host and databases
 
@@ -15,19 +19,18 @@ wp_install
 ###############################################################################
 ## Setup CiviCRM (config files, database tables)
 
-
 CIVI_DOMAIN_NAME="Demonstrators Anonymous"
 CIVI_DOMAIN_EMAIL="\"Demonstrators Anonymous\" <info@example.org>"
-CIVI_CORE="${WEB_ROOT}/wp-content/plugins/civicrm/civicrm"
+CIVI_CORE="${CMS_ROOT}/wp-content/plugins/civicrm/civicrm"
 
 if [[ "$CIVI_VERSION" =~ ^4.[0123456](\.([0-9]|alpha|beta)+)?$ ]] ; then
-  CIVI_SETTINGS="${WEB_ROOT}/wp-content/plugins/civicrm/civicrm.settings.php"
-  CIVI_FILES="${WEB_ROOT}/wp-content/plugins/files/civicrm"
-  CIVI_EXT_DIR="${WEB_ROOT}/wp-content/plugins/files/civicrm/ext"
+  CIVI_SETTINGS="${CMS_ROOT}/wp-content/plugins/civicrm/civicrm.settings.php"
+  CIVI_FILES="${CMS_ROOT}/wp-content/plugins/files/civicrm"
+  CIVI_EXT_DIR="${CMS_ROOT}/wp-content/plugins/files/civicrm/ext"
   CIVI_EXT_URL="${CMS_URL}/wp-content/plugins/files/civicrm/ext"
 else
-  CIVI_SETTINGS="${WEB_ROOT}/wp-content/uploads/civicrm/civicrm.settings.php"
-  CIVI_FILES="${WEB_ROOT}/wp-content/uploads/civicrm"
+  CIVI_SETTINGS="${CMS_ROOT}/wp-content/uploads/civicrm/civicrm.settings.php"
+  CIVI_FILES="${CMS_ROOT}/wp-content/uploads/civicrm"
   ## civicrm-core v4.7+ sets default ext dir; for older versions, we'll set our own.
 fi
 CIVI_TEMPLATEC="${CIVI_FILES}/templates_c"
@@ -37,6 +40,8 @@ civicrm_install
 
 ###############################################################################
 ## Extra configuration
+
+pushd "$CMS_ROOT" >> /dev/null
 
 ## Clear out default content. Load real content.
 TZ=$(php --info |grep 'Default timezone' |sed s/' => '/:/ |cut -d':' -f2)
@@ -52,9 +57,14 @@ wp theme install twentythirteen --activate
 wp eval '$home = get_page_by_title("Welcome to CiviCRM with WordPress"); update_option("page_on_front", $home->ID); update_option("show_on_front", "page");'
 
 wp plugin activate civicrm
+wp eval '$c=[civi_wp()->admin, "add_wpload_setting"]; if (is_callable($c)) $c();'
 wp plugin activate civicrm-demo-wp
+wp plugin install civicrm-admin-utilities
+wp plugin install gutenberg
+wp plugin install classic-editor --activate
 
 civicrm_apply_demo_defaults
+cv ev 'if(is_callable(array("CRM_Core_BAO_CMSUser","synchronize"))){CRM_Core_BAO_CMSUser::synchronize(FALSE);}else{CRM_Utils_System::synchronizeUsers();}'
 
 wp role create civicrm_admin 'CiviCRM Administrator'
 wp cap add civicrm_admin \
@@ -141,14 +151,31 @@ wp cap add civicrm_admin \
   view_public_civimail_content
 
 wp user create "$DEMO_USER" "$DEMO_EMAIL" --role=civicrm_admin --user_pass="$DEMO_PASS"
+## Ceate anonymous user role
+wp eval '$c=[civi_wp()->users->set_wp_user_capabilities()];if (is_callable($c)) $c();'
+## Force basepage
+wp eval '$c=[civi_wp()->basepage->create_wp_basepage()];if (is_callable($c)) $c();'
 
-wp civicrm api extension.install key=org.civicrm.angularprofiles debug=1
+## Setup demo extensions
+cv en --ignore-missing $CIVI_DEMO_EXTS
+if [[ "$CIVI_DEMO_EXTS" =~ volunteer ]]; then
+  wp cap add civicrm_admin \
+    register_to_volunteer \
+    log_own_hours \
+    create_volunteer_projects \
+    edit_own_volunteer_projects \
+    edit_all_volunteer_projects \
+    delete_all_volunteer_projects \
+    delete_own_volunteer_projects \
+    edit_volunteer_registration_profiles \
+    edit_volunteer_project_relationships
+fi
 
-wp civicrm api extension.install key=org.civicrm.volunteer debug=1
+## Demo sites always disable email and often disable cron
+wp civicrm api StatusPreference.create ignore_severity=critical name=checkOutboundMail
+wp civicrm api StatusPreference.create ignore_severity=critical name=checkLastCron
 
-wp cap add civicrm_admin \
-  register to volunteer \
-  log own hours \
-  create volunteer projects \
-  edit own volunteer projects \
-  delete own volunteer projects
+# Disable WP fatal error handler as it gets in the way of debugging.
+wp config set WP_DISABLE_FATAL_ERROR_HANDLER true --raw
+
+popd >> /dev/null

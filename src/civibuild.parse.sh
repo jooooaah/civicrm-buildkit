@@ -20,7 +20,7 @@ function civibuild_parse_unnamed_params() {
       continue
     fi
 
-    if [ `echo "$ACTION" | egrep -c 'snapshots|restore-all|list|cache-warmup'` -eq 1 ]; then
+    if [ `echo "$ACTION" | egrep -c 'snapshots|restore-all|list|cache-warmup|env-info'` -eq 1 ]; then
       # dont parse site-name
       break
     fi
@@ -30,7 +30,7 @@ function civibuild_parse_unnamed_params() {
 
   [ -z "$ACTION" ] && civibuild_app_usage
 
-  if [ `echo "$ACTION" | egrep -c 'snapshots|restore-all|list|cache-warmup'` -eq 0 ]; then
+  if [ `echo "$ACTION" | egrep -c 'snapshots|restore-all|list|cache-warmup|env-info'` -eq 0 ]; then
 
     if [ -z "$SITE_NAME" ]; then
       civibuild_detect_site_name
@@ -74,7 +74,7 @@ function civibuild_detect_site_name() {
   if [ -z `compgen -G $BLDDIR/*.sh` ]; then
     return;
   fi
-  local config_paths=`grep CMS_ROOT $BLDDIR/*.sh | sed s#CMS_ROOT=## | tr -d '"'`;
+  local config_paths=`grep -H CMS_ROOT $BLDDIR/*.sh | sed s#CMS_ROOT=## | tr -d '"'`;
   ## WEB_ROOT might be better than CMS_ROOT, but it may not be stored persistently on pre-existing systems.
 
   local parents=()
@@ -116,7 +116,9 @@ declare -a ARGS=()
 function civibuild_parse() {
   source "$PRJDIR/src/civibuild.defaults.sh"
   [ -f "$PRJDIR/app/civibuild.conf" ] && source "$PRJDIR/app/civibuild.conf"
-  cvutil_mkdir "$TMPDIR" "$BLDDIR" "$PRJDIR/app/private"
+  [ -f "/etc/civibuild.conf" ] && source "/etc/civibuild.conf"
+  cvutil_mkdir "$TMPDIR" "$BLDDIR"
+  [ -z "$CIVIBUILD_HOME" ] && cvutil_mkdir "$PRJDIR/app/private"
 
   civibuild_parse_unnamed_params $@
 
@@ -234,6 +236,10 @@ function civibuild_parse() {
         CMS_SQL_SKIP=1
         ;;
 
+      --no-test)
+        TEST_SQL_SKIP=1
+        ;;
+
       --patch)
         PATCHES="$PATCHES|$1"
         shift
@@ -252,6 +258,10 @@ function civibuild_parse() {
       --type)
         SITE_TYPE="$1"
         shift
+        ;;
+
+      --test-ext)
+        PHPUNIT_TGT_EXT="$1"
         ;;
 
       --url)
@@ -275,6 +285,16 @@ function civibuild_parse() {
 
       --hr-ver)
         HR_VERSION="$1"
+        shift
+        ;;
+
+      --eval)
+        RUN_EVAL="$1"
+        shift
+        ;;
+
+      --script)
+        RUN_FILE="$1"
         shift
         ;;
 

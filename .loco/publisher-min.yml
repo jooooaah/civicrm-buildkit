@@ -1,0 +1,62 @@
+format: 'loco-0.1'
+
+## The "publisher-min" configuration is used for building things on the continuous-integration server.
+##
+## This is much smaller than the default configuration. It also differs in (a) port numbers and (b) the LOCO_VAR location.
+
+#### General configuration
+environment:
+
+ ## HOSTS_TYPE: When creating an HTTP service, should we register the hostname in "/etc/hosts" ('file') or not ('none')?
+ - HOSTS_TYPE=none
+
+ ## HTTPD_*: Determine how a local folder (eg "./build/dmaster") relates to a local HTTP service (eg "http://dmaster.bknix:8001").
+ - HTTPD_DOMAIN=bknix
+ - HTTPD_PORT=8004
+ - HTTPD_VDROOT=$BKIT/build
+ - HTTPD_VISIBILITY=local
+
+ ## MYSQL_*: Like most daemons, run MySQL on auxiliary/non-standard TCP/UDP ports.
+ - MYSQLD_PORT=3310
+
+ ## XDEBUG_*: Enable or disable main XDebug options
+ - XDEBUG_MODE=off
+ #- XDEBUG_PORT=9003
+ #- XDEBUG_CONFIG=...
+
+ ## LOCALHOST: Bind services to a local IP address.
+ - LOCALHOST=127.0.0.1
+
+ # For multiprofile CI, data is split
+ - LOCO_VAR=$HOME/_bknix/ramdisk/min
+
+ # CLI applications should use our stuff
+ - AMPHOME=$HOME/_bknix/amp/min
+ - CIVIBUILD_HOME=$HTTPD_VDROOT
+ - BKIT=$LOCO_PRJ
+ - BKITBLD=$HTTPD_VDROOT
+ - MYSQL_HOME=$LOCO_VAR/mysql/conf
+ - NODE_PATH=$BKIT/node_modules:$NODE_PATH
+ - PATH=$BKIT/bin:$BKIT/node_modules/.bin:$LOCO_PRJ/.loco/bin:$PATH
+
+#### Functional service definitions
+services:
+
+  mysql:
+    enabled: true
+    init:
+      - 'loco-mysql-init'
+    run: 'mysqld --datadir="$LOCO_SVC_VAR/data"'
+    pid_file: '$LOCO_SVC_VAR/run/mysql.pid'
+    message: 'MySQL is running on "<comment>$LOCALHOST:$MYSQLD_PORT</comment>". The default credentials are user="<comment>root</comment>" and password="".'
+
+  ## Load timezone data into MySQL.
+  ## IMHO, it would make more sense to use `mysqld --init-file`... but it's futzy (across versions).
+  ## Many `mysql.com` versions have very limited syntax ("\n" handling). `mariadb` doesn't even seem to read the file...
+  mysql-tz:
+    depends: ['mysql']
+    run: 'loco-mysql-wait 300 && mysql_tzinfo_to_sql "$TZDIR" | mysql mysql && sleep 259200'
+
+## Configure the loco=>systemd export
+export:
+  include_env: '/^(PATH|NIX_SSL_.*|LOCALE_ARCHIVE|TZDIR)$/'
